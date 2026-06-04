@@ -13,7 +13,8 @@ from gsuid_core.logger import logger
 from gsuid_core.models import Event
 from gsuid_core.segment import MessageSegment
 from gsuid_core.sv import Plugins, SV
-from gsuid_core.utils.database.models import CoreUser
+# 抽群友功能已按要求注释停用，保留代码备份时不再需要读取 CoreUser。
+# from gsuid_core.utils.database.models import CoreUser
 
 from .daily_wife_config import DailyWifeConfig
 
@@ -37,11 +38,15 @@ class RoleCandidate:
     images: tuple[Path, ...]
 
 
+"""
+抽群友相关代码已按要求注释停用，保留以便之后恢复。
+
 @dataclass(frozen=True)
 class MemberCandidate:
     name: str
     user_id: str
     avatar: str
+"""
 
 
 def _cfg(key: str) -> Any:
@@ -163,6 +168,9 @@ def _event_rng(ev: Event) -> random.Random:
         return random.Random()
     return _daily_rng(ev)
 
+
+"""
+抽群友功能相关函数已按要求注释停用，保留以便之后恢复。
 
 def _group_member_probability() -> float:
     value = _cfg('DailyWifeGroupMemberProbability')
@@ -329,6 +337,7 @@ async def _send_group_member_wife(
             MessageSegment.image(member.avatar),
         ])
     return await bot.send(MessageSegment.image(member.avatar))
+"""
 
 
 def _select_daily_wife(
@@ -374,10 +383,13 @@ async def _send_daily_wife(bot: Bot, ev: Event):
         return await bot.send(error or '没有找到可用角色。')
 
     rng = _event_rng(ev)
+    """
+    抽群友概率分支已按要求注释停用，保留以便之后恢复。
     if bool(_cfg('DailyWifeEnableGroupMember')) and ev.group_id:
         members = await _load_group_member_candidates(ev)
         if members and rng.random() < _group_member_probability():
             return await _send_group_member_wife(bot, ev, rng, force_text=False)
+    """
 
     role = rng.choice(candidates)
     image = rng.choice(role.images)
@@ -400,6 +412,10 @@ async def daily_wife(bot: Bot, ev: Event):
     await _send_daily_wife(bot, ev)
 
 
+"""
+娶群友命令已按要求注释停用，保留以便之后恢复。
+
 @sv.on_fullmatch('娶群友', block=True)
 async def group_member_wife(bot: Bot, ev: Event):
     await _send_group_member_wife(bot, ev)
+"""
