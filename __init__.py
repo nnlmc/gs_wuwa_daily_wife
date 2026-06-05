@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import random
 import re
 from dataclasses import dataclass
@@ -36,6 +37,20 @@ class RoleCandidate:
     name: str
     role_ids: tuple[str, ...]
     images: tuple[Path, ...]
+
+
+@dataclass(frozen=True)
+class WifeRecord:
+    name: str
+    role_ids: tuple[str, ...]
+    image: str
+
+    @classmethod
+    def from_role(cls, role: RoleCandidate, image: Path) -> 'WifeRecord':
+        return cls(role.name, role.role_ids, str(image))
+
+    def to_role(self) -> RoleCandidate:
+        return RoleCandidate(self.name, self.role_ids, (Path(self.image),))
 
 
 """
@@ -148,10 +163,11 @@ def _collect_role_candidates(role_map: dict[str, str], pile_root: Path) -> tuple
     return tuple(sorted(candidates, key=lambda item: item.name))
 
 
-def _daily_rng(ev: Event) -> random.Random:
+def _daily_rng(ev: Event, user_id: str | int | None = None) -> random.Random:
     # 按日期、用户和当前会话固定结果；群聊会区分不同群，私聊单独固定。
     group_key = ev.group_id or 'direct'
-    seed = f'{date.today().isoformat()}:{ev.user_id}:{group_key}'
+    target_user_id = ev.user_id if user_id is None else user_id
+    seed = f'{date.today().isoformat()}:{target_user_id}:{group_key}'
     return random.Random(seed)
 
 
@@ -167,6 +183,106 @@ def _event_rng(ev: Event) -> random.Random:
     if bool(_cfg('DailyWifeMasterUnlimited')) and _is_master(ev):
         return random.Random()
     return _daily_rng(ev)
+
+
+
+def _wife_data_path() -> Path:
+    return BASE_DIR / 'daily_wife_data.json'
+
+
+def _today_key() -> str:
+    return date.today().isoformat()
+
+
+def _context_key(ev: Event) -> str:
+    return f'{ev.bot_id}:{ev.group_id or "direct"}'
+
+
+def _user_key(ev: Event, user_id: str | int | None = None) -> str:
+    return str(ev.user_id if user_id is None else user_id)
+
+
+def _load_wife_data() -> dict[str, Any]:
+    path = _wife_data_path()
+    if not path.is_file():
+        return {'days': {}}
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except Exception as exc:
+        logger.warning(f'[gs_wuwa_daily_wife] 读取数据文件失败，将使用空数据: {exc}')
+        return {'days': {}}
+    if not isinstance(data, dict):
+        return {'days': {}}
+    data.setdefault('days', {})
+    return data
+
+
+def _save_wife_data(data: dict[str, Any]) -> None:
+    _wife_data_path().write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+
+
+def _get_today_context(data: dict[str, Any], ev: Event) -> dict[str, Any]:
+    day = data.setdefault('days', {}).setdefault(_today_key(), {})
+    context = day.setdefault(_context_key(ev), {})
+    context.setdefault('wives', {})
+    context.setdefault('rob_attempts', {})
+    return context
+
+
+def _record_to_dict(record: WifeRecord) -> dict[str, Any]:
+    return {'name': record.name, 'role_ids': list(record.role_ids), 'image': record.image}
+
+
+def _record_from_dict(data: dict[str, Any]) -> WifeRecord | None:
+    try:
+        record = WifeRecord(
+            name=str(data['name']),
+            role_ids=tuple(str(item) for item in data.get('role_ids', ())),
+            image=str(data['image']),
+        )
+    except Exception:
+        return None
+    if not record.name or not record.image or not Path(record.image).is_file():
+        return None
+    return record
+
+
+def _get_event_target_user_id(ev: Event) -> str | None:
+    at_list = getattr(ev, 'at_list', None)
+    if at_list:
+        value = next(iter(at_list), None)
+        if value:
+            return str(value)
+
+    for attr in ('at', 'target_id', 'target_user_id'):
+        value = getattr(ev, attr, None)
+        if value:
+            if isinstance(value, (list, tuple, set)):
+                value = next(iter(value), None)
+            if value:
+                return str(value)
+
+    raw_text = str(getattr(ev, 'text', '') or getattr(ev, 'raw_text', '') or '').strip()
+    match = re.search(r'(?:@|qq=|qq:|QQ=|QQ:)?(\d{5,20})', raw_text)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _rob_success_rate() -> float:
+    try:
+        value = float(_cfg('DailyWifeRobSuccessRate'))
+    except (TypeError, ValueError):
+        value = 0.5
+    return max(0.0, min(1.0, value))
+
+
+def _build_rob_success_text(role: RoleCandidate, target_user_id: str) -> str:
+    return str(_cfg('DailyWifeRobSuccessTemplate') or '抢老婆成功！你把对方今天的老婆{name}抢过来了！').format(
+        name=role.name,
+        role_id='/'.join(role.role_ids),
+        target=target_user_id,
+    )
 
 
 """
@@ -377,6 +493,29 @@ def _load_candidates() -> tuple[tuple[RoleCandidate, ...] | None, str | None]:
     return candidates, None
 
 
+async def _ensure_daily_wife_record(ev: Event, user_id: str | int | None = None) -> WifeRecord | None:
+    data = _load_wife_data()
+    context = _get_today_context(data, ev)
+    key = _user_key(ev, user_id)
+    current = context['wives'].get(key)
+    if isinstance(current, dict):
+        record = _record_from_dict(current)
+        if record is not None:
+            return record
+
+    candidates, error = _load_candidates()
+    if error or not candidates:
+        return None
+
+    rng = _daily_rng(ev, key)
+    role = rng.choice(candidates)
+    image = rng.choice(role.images)
+    record = WifeRecord.from_role(role, image)
+    context['wives'][key] = _record_to_dict(record)
+    _save_wife_data(data)
+    return record
+
+
 async def _send_daily_wife(bot: Bot, ev: Event):
     candidates, error = _load_candidates()
     if error or not candidates:
@@ -391,8 +530,16 @@ async def _send_daily_wife(bot: Bot, ev: Event):
             return await _send_group_member_wife(bot, ev, rng, force_text=False)
     """
 
-    role = rng.choice(candidates)
-    image = rng.choice(role.images)
+    if bool(_cfg('DailyWifeMasterUnlimited')) and _is_master(ev):
+        role = rng.choice(candidates)
+        image = rng.choice(role.images)
+        record = WifeRecord.from_role(role, image)
+    else:
+        record = await _ensure_daily_wife_record(ev)
+        if record is None:
+            return await bot.send('没有找到可用角色。')
+        role = record.to_role()
+        image = Path(record.image)
     logger.info(
         f'[gs_wuwa_daily_wife] user={ev.user_id} group={ev.group_id or "direct"} '
         f'role={role.name} ids={role.role_ids} image={image}'
@@ -407,9 +554,57 @@ async def _send_daily_wife(bot: Bot, ev: Event):
         await bot.send(MessageSegment.image(image))
 
 
+
+
+async def _send_rob_wife(bot: Bot, ev: Event):
+    target_user_id = _get_event_target_user_id(ev)
+    if not target_user_id:
+        return await bot.send('要抢谁的老婆？请艾特对方或在命令后面写对方 QQ。')
+
+    robber_id = _user_key(ev)
+    if target_user_id == robber_id:
+        return await bot.send('自己抢自己的老婆也太奇怪了吧！')
+
+    target_record = await _ensure_daily_wife_record(ev, target_user_id)
+    if target_record is None:
+        return await bot.send('还没找到可以抢的老婆。')
+
+    data = _load_wife_data()
+    context = _get_today_context(data, ev)
+    attempts = context.setdefault('rob_attempts', {})
+    is_master = _is_master(ev)
+    if not is_master and attempts.get(robber_id):
+        return await bot.send('今天已经抢过老婆啦，明天再来吧！')
+
+    if not is_master:
+        attempts[robber_id] = True
+
+    if random.random() >= _rob_success_rate():
+        _save_wife_data(data)
+        return await bot.send('抢老婆失败了，还被对方痛扁了一顿！🤣')
+
+    context['wives'][robber_id] = _record_to_dict(target_record)
+    _save_wife_data(data)
+
+    role = target_record.to_role()
+    image = Path(target_record.image)
+    if bool(_cfg('DailyWifeSendText')):
+        await bot.send([
+            _build_rob_success_text(role, target_user_id),
+            MessageSegment.image(image),
+        ])
+    else:
+        await bot.send(_build_rob_success_text(role, target_user_id))
+
+
 @sv.on_fullmatch('今日老婆', block=True)
 async def daily_wife(bot: Bot, ev: Event):
     await _send_daily_wife(bot, ev)
+
+
+@sv.on_prefix(('抢老婆', '抢今日老婆'), block=True)
+async def rob_wife(bot: Bot, ev: Event):
+    await _send_rob_wife(bot, ev)
 
 
 """

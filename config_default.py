@@ -52,6 +52,16 @@ CONFIG_DEFAULT: Dict[str, GSC] = {
         '开启后，GSCore 主人触发今日老婆时不再按每日固定结果，可重复随机抽取',
         True,
     ),
+    'DailyWifeRobSuccessRate': GsStrConfig(
+        '抢老婆成功概率',
+        '0 到 1 之间的小数，例如 0.5 表示 50% 成功。普通用户每天一次，机器人主人不受次数限制',
+        '0.5',
+    ),
+    'DailyWifeRobSuccessTemplate': GsStrConfig(
+        '抢老婆成功提示',
+        '可用变量：{name} 角色名，{role_id} 数字 ID，{target} 被抢用户 ID',
+        '抢老婆成功！你把对方今天的老婆{name}抢过来了！',
+    ),
     # 'DailyWifeOneBotApiUrl': GsStrConfig(
     #     'OneBot HTTP API 地址',
     #     '用于直抓群成员列表，留空则只使用 GSCore 成员缓存；例如 http://127.0.0.1:3000',
