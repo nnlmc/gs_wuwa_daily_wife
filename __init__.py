@@ -439,7 +439,10 @@ async def _send_rob_wife(bot: Bot, ev: Event):
     if bool(_cfg('DailyWifeSendText')):
         await _send_role_image(bot, role, target_record.image, text, robber_id)
     else:
-        await bot.send(text)
+        if bool(_cfg('DailyWifeAtUser')):
+            await bot.send([MessageSegment.at(robber_id), text])
+        else:
+            await bot.send(text)
 
 
 @sv.on_fullmatch('今日老婆', block=True)
