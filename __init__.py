@@ -264,8 +264,19 @@ def _get_today_context(data: dict[str, Any], ev: Event) -> dict[str, Any]:
     return context
 
 
-def _record_to_dict(record: WifeRecord) -> dict[str, Any]:
-    return {'name': record.name, 'role_ids': list(record.role_ids), 'image': record.image}
+def _record_to_dict(record: WifeRecord, ev: Event | None = None, user_id: str | int | None = None) -> dict[str, Any]:
+    data: dict[str, Any] = {'name': record.name, 'role_ids': list(record.role_ids), 'image': record.image}
+    if ev is not None:
+        data.update(
+            {
+                'user_id': _user_key(ev, user_id),
+                'group_id': str(ev.group_id or 'direct'),
+                'bot_id': str(ev.bot_id),
+                'day': _today_key(),
+                'updated_at': int(time.time()),
+            }
+        )
+    return data
 
 
 def _record_from_dict(data: dict[str, Any]) -> WifeRecord | None:
@@ -350,9 +361,26 @@ async def _ensure_daily_wife_record(ev: Event, user_id: str | int | None = None)
     role = rng.choice(candidates)
     image = rng.choice(role.images)
     record = WifeRecord.from_role(role, image)
-    context['wives'][key] = _record_to_dict(record)
+    context['wives'][key] = _record_to_dict(record, ev, key)
     _save_wife_data(data)
     return record
+
+
+def _get_existing_daily_wife_record(ev: Event, user_id: str | int) -> WifeRecord | None:
+    data = _load_wife_data()
+    context = _get_today_context(data, ev)
+    current = context['wives'].get(_user_key(ev, user_id))
+    if isinstance(current, dict):
+        return _record_from_dict(current)
+    return None
+
+
+def _save_daily_wife_record(ev: Event, record: WifeRecord, user_id: str | int | None = None) -> None:
+    data = _load_wife_data()
+    context = _get_today_context(data, ev)
+    key = _user_key(ev, user_id)
+    context['wives'][key] = _record_to_dict(record, ev, key)
+    _save_wife_data(data)
 
 
 async def _send_role_image(
@@ -395,6 +423,8 @@ async def _send_daily_wife(bot: Bot, ev: Event):
         role = record.to_role()
         image = record.image
 
+    _save_daily_wife_record(ev, record)
+
     logger.info(
         f'[gs_wuwa_daily_wife] user={ev.user_id} group={ev.group_id or "direct"} '
         f'role={role.name} ids={role.role_ids} image={image}'
@@ -413,9 +443,9 @@ async def _send_rob_wife(bot: Bot, ev: Event):
     if target_user_id == robber_id:
         return await bot.send('自己抢自己的老婆也太奇怪了吧！')
 
-    target_record = await _ensure_daily_wife_record(ev, target_user_id)
+    target_record = _get_existing_daily_wife_record(ev, target_user_id)
     if target_record is None:
-        return await bot.send('还没找到可以抢的老婆。')
+        return await bot.send('对方今天还没有在当前群发送今日老婆，暂时抢不到他的老婆。')
 
     data = _load_wife_data()
     context = _get_today_context(data, ev)
@@ -431,18 +461,13 @@ async def _send_rob_wife(bot: Bot, ev: Event):
         _save_wife_data(data)
         return await bot.send('抢老婆失败了，还被对方痛扁了一顿！🤣')
 
-    context['wives'][robber_id] = _record_to_dict(target_record)
+    context['wives'][robber_id] = _record_to_dict(target_record, ev, robber_id)
+    context['wives'][robber_id]['stolen_from'] = target_user_id
     _save_wife_data(data)
 
     role = target_record.to_role()
     text = _build_rob_success_text(role, target_user_id)
-    if bool(_cfg('DailyWifeSendText')):
-        await _send_role_image(bot, role, target_record.image, text, robber_id)
-    else:
-        if bool(_cfg('DailyWifeAtUser')):
-            await bot.send([MessageSegment.at(robber_id), text])
-        else:
-            await bot.send(text)
+    await _send_role_image(bot, role, target_record.image, text, robber_id)
 
 
 @sv.on_fullmatch('今日老婆', block=True)
