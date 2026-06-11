@@ -49,6 +49,7 @@ gs_wuwa_daily_wife
 - `DailyWifeShowRoleId`：是否显示角色 ID；
 - `DailyWifeTextTemplate`：文字模板，可用变量 `{name}`、`{role_id}`；
 - `DailyWifeMasterUnlimited`：主人无限抽老婆，开启后 GSCore 主人不会固定当天结果；
+- `DailyWifeRobEnabled`：是否启用抢老婆命令；
 - `DailyWifeRobSuccessRate`：抢老婆成功概率；
 - `DailyWifeRobSuccessTemplate`：抢老婆成功提示，可用变量 `{name}`、`{role_id}`、`{target}`。
 
@@ -56,6 +57,7 @@ gs_wuwa_daily_wife
 
 使用 `wl抢老婆 @对方` 或 `wl抢老婆 对方QQ` 可以抢别人今天在当前群抽到的老婆。
 
+- 控制台关闭 `DailyWifeRobEnabled` 后，抢老婆命令不会继续执行；
 - 普通用户每天只能抢一次；
 - 机器人主人不受次数限制；
 - 目标用户当天必须已经在当前群发送过 `今日老婆`；

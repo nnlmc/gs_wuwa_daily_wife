@@ -75,6 +75,21 @@ def _cfg(key: str) -> Any:
     return DailyWifeConfig.get_config(key).data
 
 
+def _cfg_bool(key: str, default: bool = False) -> bool:
+    value = _cfg(key)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {'true', '1', 'yes', 'y', 'on', 'enable', 'enabled', '开启'}:
+            return True
+        if text in {'false', '0', 'no', 'n', 'off', 'disable', 'disabled', '关闭'}:
+            return False
+    return default
+
+
 def _gallery_api_url() -> str:
     return str(_cfg('DailyWifeGalleryApiUrl') or DEFAULT_GALLERY_API_URL).strip()
 
@@ -528,6 +543,9 @@ async def _send_daily_wife(bot: Bot, ev: Event):
 
 
 async def _send_rob_wife(bot: Bot, ev: Event):
+    if not _cfg_bool('DailyWifeRobEnabled', True):
+        return await bot.send('抢老婆功能当前已关闭。')
+
     target_user_id = _get_event_target_user_id(ev)
     if not target_user_id:
         return await bot.send('要抢谁的老婆？请艾特对方或在命令后面写对方 QQ。')

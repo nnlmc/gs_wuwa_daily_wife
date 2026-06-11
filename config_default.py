@@ -49,6 +49,11 @@ CONFIG_DEFAULT: Dict[str, GSC] = {
         '开启后，GSCore 主人触发今日老婆时不再按每日固定结果，可重复随机抽取',
         True,
     ),
+    'DailyWifeRobEnabled': GsBoolConfig(
+        '启用抢老婆',
+        '关闭后抢老婆命令不再生效',
+        True,
+    ),
     'DailyWifeRobSuccessRate': GsStrConfig(
         '抢老婆成功概率',
         '0 到 1 之间的小数，例如 0.5 表示 50% 成功。普通用户每天一次，机器人主人不受次数限制',
