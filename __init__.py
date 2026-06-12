@@ -495,7 +495,7 @@ async def _wife_list_text(ev: Event) -> str:
 
     items.sort(key=lambda item: (item[0], item[1]))
     lines = ['今日老婆列表：']
-    lines.extend(f'{index}.{display_name}今天的老婆是{wife_name}' for index, (_, display_name, wife_name) in enumerate(items, 1))
+    lines.extend(f'{index}. {display_name} → {wife_name}' for index, (_, display_name, wife_name) in enumerate(items, 1))
     return '\n'.join(lines)
 
 
