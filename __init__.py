@@ -21,7 +21,6 @@ from gsuid_core.utils.database.models import CoreUser
 
 from .daily_wife_config import DailyWifeConfig
 
-
 Plugins(
     name='gs_wuwa_daily_wife',
     disable_force_prefix=True,
@@ -32,6 +31,10 @@ sv = SV('鸣潮今日老婆')
 BASE_DIR = Path(__file__).parent
 CACHE_TTL_SECONDS = 300
 MEMBER_AVATAR_CACHE_SECONDS = 7 * 24 * 60 * 60
+
+# --- 日志前缀 ---
+LOG_PREFIX = '[鸣潮今日老婆]'
+
 # 本地图片读取相关常量
 ROLE_MAP_RE = re.compile(r'^\s*(\d+)\s*[:：]\s*(.+?)\s*$')
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'}
@@ -117,15 +120,15 @@ def _cfg_probability(key: str, default: float = 0.0) -> float:
 
 
 def _configured_path(key: str) -> Path | None:
-    '''读取配置中的路径，留空返回 None。'''
     raw = str(_cfg(key) or '').strip().strip('"')
     if not raw:
         return None
-    return Path(raw).expanduser()
+    path = Path(raw).expanduser()
+    logger.debug(f'{LOG_PREFIX} 读取配置路径 {key}: {path}')
+    return path
 
 
 def _resolve_role_map_path() -> Path | None:
-    '''定位角色 ID 对照表：优先配置路径，其次插件内置 role_id_map.txt。'''
     configured = _configured_path('DailyWifeRoleMapPath')
     candidates = [
         configured,
@@ -135,12 +138,13 @@ def _resolve_role_map_path() -> Path | None:
     ]
     for path in candidates:
         if path and path.is_file():
+            logger.debug(f'{LOG_PREFIX} 成功定位角色对照表文件: {path}')
             return path
+    logger.warning(f'{LOG_PREFIX} 未能找到角色对照表文件')
     return None
 
 
 def _resolve_role_pile_root() -> Path | None:
-    '''定位本地角色立绘目录 custom_role_pile：优先配置路径，其次自动查找。'''
     configured = _configured_path('DailyWifeCustomRolePilePath')
     candidates = [configured] if configured else []
     candidates.extend(
@@ -154,7 +158,6 @@ def _resolve_role_pile_root() -> Path | None:
 
     try:
         import gsuid_core
-
         core_root = Path(gsuid_core.__file__).resolve().parents[1]
         candidates.append(core_root / 'data' / 'XutheringWavesUID' / 'custom_role_pile')
     except Exception:
@@ -162,11 +165,12 @@ def _resolve_role_pile_root() -> Path | None:
 
     for path in candidates:
         if path and path.is_dir():
+            logger.debug(f'{LOG_PREFIX} 成功定位自定义角色图片目录: {path}')
             return path
+    logger.info(f'{LOG_PREFIX} 未能找到自定义角色图片目录 custom_role_pile')
     return None
 
 def _resolve_default_role_pile_root() -> Path | None:
-    '''定位默认的角色立绘目录 role_pile：自动查找。'''
     candidates = [
         Path.cwd() / 'gsuid_core' / 'data' / 'XutheringWavesUID' / 'resource' / 'role_pile',
         Path.cwd() / 'data' / 'XutheringWavesUID' / 'resource' / 'role_pile',
@@ -183,11 +187,12 @@ def _resolve_default_role_pile_root() -> Path | None:
 
     for path in candidates:
         if path and path.is_dir():
+            logger.debug(f'{LOG_PREFIX} 成功定位默认角色图片目录: {path}')
             return path
+    logger.info(f'{LOG_PREFIX} 未能找到默认角色图片目录 role_pile')
     return None
 
 def _load_role_map(path: Path) -> dict[str, str]:
-    '''解析「ID：角色名」格式的对照表。'''
     result: dict[str, str] = {}
     for line in path.read_text(encoding='utf-8').splitlines():
         match = ROLE_MAP_RE.match(line)
@@ -197,11 +202,11 @@ def _load_role_map(path: Path) -> dict[str, str]:
         role_name = role_name.strip()
         if role_name:
             result[role_id] = role_name
+    logger.debug(f'{LOG_PREFIX} 加载了 {len(result)} 个角色 ID 映射关系')
     return result
 
 
 def _role_images(role_dir: Path) -> tuple[str, ...]:
-    '''递归收集某角色目录下的所有图片，返回本地路径字符串。'''
     images = [
         path
         for path in role_dir.rglob('*')
@@ -211,7 +216,6 @@ def _role_images(role_dir: Path) -> tuple[str, ...]:
 
 
 def _collect_role_candidates(role_map: dict[str, str], pile_root: Path, default_pile_root: Path | None) -> tuple[RoleCandidate, ...]:
-    '''按对照表把本地目录里的图片归并成角色候选，支持回退到默认面板图。'''
     grouped: dict[str, dict[str, list[Any]]] = {}
     for role_id in sorted(role_map.keys(), key=lambda item: int(item) if item.isdigit() else item):
         role_name = role_map[role_id]
@@ -227,12 +231,11 @@ def _collect_role_candidates(role_map: dict[str, str], pile_root: Path, default_
             
         # 2. 如果自定义目录没有图片，且存在默认面板目录，尝试获取默认图片
         if not images and default_pile_root and default_pile_root.is_dir():
-            # 遍历支持的扩展名，匹配 role_pile_{role_id}.ext
             for ext in IMAGE_EXTENSIONS:
                 fallback_img = default_pile_root / f'role_pile_{role_id}{ext}'
                 if fallback_img.is_file():
                     images.append(str(fallback_img))
-                    break  # 找到一张默认图即可
+                    break
 
         if not images:
             continue
@@ -250,11 +253,12 @@ def _collect_role_candidates(role_map: dict[str, str], pile_root: Path, default_
                 images=tuple(bucket['images']),
             )
         )
+    logger.info(f'{LOG_PREFIX} 成功归并候选角色 {len(candidates)} 名')
     return tuple(sorted(candidates, key=lambda item: item.name))
 
 
 def _load_local_candidates() -> tuple[tuple[RoleCandidate, ...] | None, str | None]:
-    '''从本地目录加载角色候选。'''
+    logger.debug(f'{LOG_PREFIX} 开始从本地加载角色候选列表...')
     role_map_path = _resolve_role_map_path()
     if role_map_path is None:
         return None, '没有找到鸣潮角色 ID 对照表。'
@@ -265,7 +269,6 @@ def _load_local_candidates() -> tuple[tuple[RoleCandidate, ...] | None, str | No
     if pile_root is None and default_pile_root is None:
         return None, '没有找到 custom_role_pile 或默认 role_pile 图片目录。'
         
-    # 如果没找到自定义目录，给个假路径防止 pathlib 报错，全靠默认目录兜底
     if pile_root is None:
         pile_root = Path("dummy_non_existent_path")
 
@@ -273,39 +276,30 @@ def _load_local_candidates() -> tuple[tuple[RoleCandidate, ...] | None, str | No
         role_map = _load_role_map(role_map_path)
         candidates = _collect_role_candidates(role_map, pile_root, default_pile_root)
     except Exception as exc:
-        logger.warning(f'[gs_wuwa_daily_wife] 读取本地图片目录失败: {exc}')
+        logger.exception(f'{LOG_PREFIX} 读取本地图片目录失败: {exc}')
         return None, '读取本地图片目录失败。'
 
     if not candidates:
+        logger.warning(f'{LOG_PREFIX} 扫描图片目录完成，但未找到可用角色图片')
         return None, '图片目录里没有找到可用角色图片。'
     return candidates, None
 
 
 def _normalize_role_name(name: str) -> str:
-    '''归一化角色名：统一中点分隔符并去空白，避免因 ・/·/空格 差异导致性别误判。'''
     return name.replace('・', '·').replace('•', '·').strip()
 
-
-# 预归一化的男角色名单，匹配时两边都归一化，杜绝分隔符差异
 _MALE_ROLE_NAMES_NORM = {_normalize_role_name(n) for n in EXCLUDED_ROLE_NAMES}
 
-
 def _is_male_role(name: str) -> bool:
-    '''是否男角色（用于今日老婆/今日老公的性别过滤）。'''
     return _normalize_role_name(name) in _MALE_ROLE_NAMES_NORM
 
-
 def _is_excluded_role(name: str) -> bool:
-    '''是否始终排除的角色（如漂泊者，性别不固定）。'''
     return any(keyword in name for keyword in EXCLUDED_ROLE_KEYWORDS)
-
 
 def _husband_enabled() -> bool:
     return _cfg_bool('DailyWifeHusbandEnabled', False)
 
-
 def _filter_by_mode(candidates: tuple['RoleCandidate', ...], mode: str) -> tuple['RoleCandidate', ...]:
-    '''按模式过滤候选：husband 只留男角色，wife 只留非男角色。'''
     if mode == 'husband':
         return tuple(role for role in candidates if _is_male_role(role.name))
     return tuple(role for role in candidates if not _is_male_role(role.name))
@@ -316,9 +310,9 @@ async def _load_candidates() -> tuple[tuple[RoleCandidate, ...] | None, str | No
 
     now = time.time()
     if CANDIDATE_CACHE and now - CANDIDATE_CACHE[0] < CACHE_TTL_SECONDS:
+        logger.debug(f'{LOG_PREFIX} 使用缓存的候选角色列表')
         return CANDIDATE_CACHE[1], None
 
-    # 本地读取为同步文件操作，放到线程里避免阻塞
     candidates, error = await asyncio.to_thread(_load_local_candidates)
     if error or not candidates:
         return None, error
@@ -333,6 +327,7 @@ def _daily_rng(ev: Event, user_id: str | int | None = None, salt: str = '') -> r
     seed = f'{date.today().isoformat()}:{target_user_id}:{group_key}'
     if salt:
         seed = f'{seed}:{salt}'
+    logger.debug(f'{LOG_PREFIX} 生成随机数种子: {seed}')
     return random.Random(seed)
 
 
@@ -392,7 +387,7 @@ async def _load_group_display_names(ev: Event) -> dict[str, str]:
     try:
         users = await CoreUser.get_group_all_user(str(ev.group_id))
     except Exception as exc:
-        logger.warning(f'[gs_wuwa_daily_wife] 读取 GsCore 群成员缓存失败: {exc}')
+        logger.warning(f'{LOG_PREFIX} 读取 GsCore 群成员缓存失败: {exc}')
         return {}
 
     preferred_bot_id = str(getattr(ev, 'real_bot_id', '') or ev.bot_id or '').strip()
@@ -407,6 +402,7 @@ async def _load_group_display_names(ev: Event) -> dict[str, str]:
             fallback[user_id] = name
             if preferred_bot_id and str(getattr(user, 'bot_id', '') or '').strip() == preferred_bot_id:
                 exact[user_id] = name
+    logger.debug(f'{LOG_PREFIX} 成功加载群 {ev.group_id} 的成员显示名称')
     return exact or fallback
 
 
@@ -443,6 +439,7 @@ def _usable_cached_avatar(path: Path, check_ttl: bool = True) -> bool:
         if not path.is_file() or path.stat().st_size <= 0:
             return False
         if check_ttl and time.time() - path.stat().st_mtime > MEMBER_AVATAR_CACHE_SECONDS:
+            logger.debug(f'{LOG_PREFIX} 缓存的头像已过期: {path}')
             return False
         return True
     except Exception:
@@ -451,18 +448,21 @@ def _usable_cached_avatar(path: Path, check_ttl: bool = True) -> bool:
 
 def _download_avatar(url: str, path: Path) -> bool:
     try:
+        logger.debug(f'{LOG_PREFIX} 开始下载头像: {url} -> {path}')
         path.parent.mkdir(parents=True, exist_ok=True)
         request = Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urlopen(request, timeout=8) as response:
             data = response.read(2 * 1024 * 1024 + 1)
         if not data or len(data) > 2 * 1024 * 1024:
+            logger.warning(f'{LOG_PREFIX} 下载头像数据无效或体积过大: {url}')
             return False
         tmp_path = path.with_suffix('.tmp')
         tmp_path.write_bytes(data)
         tmp_path.replace(path)
+        logger.info(f'{LOG_PREFIX} 头像下载完成: {path}')
         return True
     except Exception as exc:
-        logger.warning(f'[gs_wuwa_daily_wife] 下载群友头像失败: {url} -> {exc}')
+        logger.warning(f'{LOG_PREFIX} 下载群友头像失败: {url} -> {exc}')
         return False
 
 
@@ -495,7 +495,7 @@ async def _load_group_member_candidates(ev: Event) -> tuple[MemberCandidate, ...
     try:
         users = await CoreUser.get_group_all_user(str(ev.group_id))
     except Exception as exc:
-        logger.warning(f'[gs_wuwa_daily_wife] 读取 GsCore 群成员缓存失败: {exc}')
+        logger.warning(f'{LOG_PREFIX} 读取 GsCore 群成员缓存失败: {exc}')
         return ()
 
     bot_ids = {
@@ -525,6 +525,7 @@ async def _load_group_member_candidates(ev: Event) -> tuple[MemberCandidate, ...
             exact[user_id] = candidate
 
     result = exact or fallback
+    logger.debug(f'{LOG_PREFIX} 获取到 {len(result)} 个群友候选对象')
     return tuple(sorted(result.values(), key=lambda item: (item.name, item.user_id)))
 
 
@@ -544,7 +545,9 @@ async def _pick_group_member(ev: Event, rng: random.Random) -> MemberCandidate |
     for member in candidates:
         resolved = await _resolve_member_candidate_avatar(member)
         if resolved is not None:
+            logger.info(f'{LOG_PREFIX} 成功挑选群友: {resolved.name} ({resolved.user_id})')
             return resolved
+    logger.warning(f'{LOG_PREFIX} 未能成功获取任一群友的有效头像')
     return None
 
 
@@ -558,9 +561,12 @@ async def _roll_group_member_wife(ev: Event, user_id: str | int | None = None, r
 
     key = _user_key(ev, user_id)
     hit_rng = rng or _daily_rng(ev, key, 'group_member_probability')
-    if hit_rng.random() >= probability:
+    rolled_prob = hit_rng.random()
+    if rolled_prob >= probability:
+        logger.debug(f'{LOG_PREFIX} 抽群友检定未通过: {rolled_prob:.4f} >= {probability}')
         return None
 
+    logger.info(f'{LOG_PREFIX} 触发抽群友逻辑')
     pick_rng = rng or _daily_rng(ev, key, 'group_member_pick')
     member = await _pick_group_member(ev, pick_rng)
     if member is None:
@@ -571,11 +577,13 @@ async def _roll_group_member_wife(ev: Event, user_id: str | int | None = None, r
 def _load_wife_data() -> dict[str, Any]:
     path = _wife_data_path()
     if not path.is_file():
+        logger.debug(f'{LOG_PREFIX} 数据文件不存在，将创建新数据')
         return {'days': {}}
     try:
         data = json.loads(path.read_text(encoding='utf-8'))
+        logger.debug(f'{LOG_PREFIX} 成功加载数据文件: {path.name}')
     except Exception as exc:
-        logger.warning(f'[gs_wuwa_daily_wife] 读取数据文件失败，将使用空数据: {exc}')
+        logger.exception(f'{LOG_PREFIX} 读取数据文件失败，将使用空数据: {exc}')
         return {'days': {}}
     if not isinstance(data, dict):
         return {'days': {}}
@@ -584,7 +592,11 @@ def _load_wife_data() -> dict[str, Any]:
 
 
 def _save_wife_data(data: dict[str, Any]) -> None:
-    _wife_data_path().write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    try:
+        _wife_data_path().write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+        logger.debug(f'{LOG_PREFIX} 数据文件已保存')
+    except Exception as exc:
+        logger.error(f'{LOG_PREFIX} 保存数据文件失败: {exc}')
 
 
 def _get_today_context(data: dict[str, Any], ev: Event) -> dict[str, Any]:
@@ -621,7 +633,6 @@ def _record_to_dict(record: WifeRecord, ev: Event | None = None, user_id: str | 
 
 
 def _is_valid_image_ref(image: str) -> bool:
-    '''图片引用是否有效：存在的本地文件。'''
     if not image:
         return False
     try:
@@ -639,15 +650,18 @@ def _record_from_dict(data: dict[str, Any]) -> WifeRecord | None:
             record_type=str(data.get('record_type') or 'role'),
             target_user_id=str(data.get('target_user_id') or ''),
         )
-    except Exception:
+    except Exception as exc:
+        logger.error(f'{LOG_PREFIX} 解析 Record 字典异常: {exc}')
         return None
     if not record.name:
         return None
     if record.record_type == 'member':
         if record.image and not _is_valid_image_ref(record.image):
+            logger.debug(f'{LOG_PREFIX} 群友头像路径已失效: {record.image}')
             return None
         return record
     if not _is_valid_image_ref(record.image):
+        logger.debug(f'{LOG_PREFIX} 角色图片路径已失效: {record.image}')
         return None
     return record
 
@@ -739,9 +753,11 @@ async def _ensure_daily_wife_record(
     context = _get_today_context(data, ev)
     key = _user_key(ev, user_id)
     current = context[bucket].get(key)
+    
     if isinstance(current, dict):
         record = _record_from_dict(current)
         if record is not None:
+            logger.debug(f'{LOG_PREFIX} 命中已有的 {mode} 记录: {record.name}')
             return record
 
     if mode == 'wife':
@@ -753,15 +769,19 @@ async def _ensure_daily_wife_record(
 
     candidates, error = await _load_candidates()
     if error or not candidates:
+        logger.error(f'{LOG_PREFIX} 获取候选列表失败: {error}')
         return None
     candidates = _filter_by_mode(candidates, mode)
     if not candidates:
+        logger.warning(f'{LOG_PREFIX} 过滤后没有可用的 {mode} 角色')
         return None
 
     rng = _daily_rng(ev, key, salt)
     role = rng.choice(candidates)
     image = rng.choice(role.images)
     record = WifeRecord.from_role(role, image)
+    
+    logger.info(f'{LOG_PREFIX} 为用户 {key} 生成新的 {mode}: {record.name}')
     context[bucket][key] = _record_to_dict(record, ev, key)
     _save_wife_data(data)
     return record
@@ -846,9 +866,8 @@ async def _send_role_image(
     text: str | None = None,
     user_id: str | int | None = None,
 ) -> None:
-    # 只支持本地图片：校验文件存在后直接用路径发送
     if not Path(image_url).is_file():
-        logger.warning(f'[gs_wuwa_daily_wife] 本地图片不存在: {image_url}')
+        logger.warning(f'{LOG_PREFIX} 本地图片不存在: {image_url}')
         await bot.send('本地图片文件不存在，请检查 custom_role_pile 目录。')
         return
     image: Any = Path(image_url)
@@ -878,7 +897,7 @@ async def _send_local_image(
         messages.append(text)
     if image_url:
         if not Path(image_url).is_file():
-            logger.warning(f'[gs_wuwa_daily_wife] 本地图片不存在: {image_url}')
+            logger.warning(f'{LOG_PREFIX} 本地图片不存在: {image_url}')
             if not text:
                 await bot.send(missing_hint)
                 return
@@ -901,14 +920,15 @@ async def _send_record_image(
     hint = '本地群友头像文件不存在，请稍后重试。' if record.record_type == 'member' else '本地图片文件不存在，请检查 custom_role_pile 目录。'
     await _send_local_image(bot, record.image, hint, text, user_id)
 
+
 async def _send_daily_wife(bot: Bot, ev: Event, mode: str = 'wife', specified_name: str = ''):
     title = '老公' if mode == 'husband' else '老婆'
+    logger.info(f'{LOG_PREFIX} 用户 {ev.user_id} 在群 {ev.group_id or "direct"} 请求 {title} (指定: {specified_name or "无"})')
     
     is_master = _is_master(ev)
     is_debug = _cfg_bool('DailyWifeDebugMode', False)
     is_debug_active = is_debug and is_master
 
-    # 老婆模式下，若今天的老婆已被抢走，且不处于 Debug 模式，则不再补抽
     if mode == 'wife' and not is_debug_active:
         data = _load_wife_data()
         context = _get_today_context(data, ev)
@@ -918,6 +938,7 @@ async def _send_daily_wife(bot: Bot, ev: Event, mode: str = 'wife', specified_na
         if isinstance(current_record, dict) and current_record.get('stolen_by'):
             wife_name = current_record.get('name', '老婆')
             stolen_by_name = current_record.get('stolen_by_name') or current_record.get('stolen_by')
+            logger.info(f'{LOG_PREFIX} 用户 {ev.user_id} 的老婆已被抢，拒绝分配新角色')
             return await bot.send(f'你的{wife_name}已经被{stolen_by_name}抢走了，今天就先忍忍吧~')
 
     candidates, error = await _load_candidates()
@@ -930,8 +951,8 @@ async def _send_daily_wife(bot: Bot, ev: Event, mode: str = 'wife', specified_na
 
     record: WifeRecord | None = None
 
-    # Debug 模式（主人专享）：无限抽、可指定、不计入记录
     if is_debug_active:
+        logger.debug(f'{LOG_PREFIX} 主人 Debug 模式开启')
         if specified_name:
             target_candidates = [c for c in candidates if c.name == specified_name]
             if not target_candidates:
@@ -942,36 +963,33 @@ async def _send_daily_wife(bot: Bot, ev: Event, mode: str = 'wife', specified_na
             
         image = random.choice(role.images)
         record = WifeRecord.from_role(role, image)
-        # ⚠️ 注意：此处故意跳过 _save_daily_wife_record 调用，实现“不计入列表”
     else:
-        # 拦截普通用户的指定请求
         if specified_name:
+            logger.warning(f'{LOG_PREFIX} 普通用户 {ev.user_id} 尝试指定角色 {specified_name}，已拒绝')
             return await bot.send(f'只有在 Debug 模式下主人才能指定{title}哦。')
 
         record = await _ensure_daily_wife_record(ev, mode=mode)
         if record is None:
             return await bot.send(f'没有找到可用的{title}角色。')
-
-        # 正常模式下必须保存记录
         _save_daily_wife_record(ev, record, mode=mode)
 
-    # 兼容处理群友(member)和角色(role)的不同日志记录格式
     if record.record_type == 'member':
         member = record.to_member()
         logger.info(
-            f'[gs_wuwa_daily_wife] mode={mode} user={ev.user_id} group={ev.group_id or "direct"} '
+            f'{LOG_PREFIX} mode={mode} user={ev.user_id} group={ev.group_id or "direct"} '
             f'member={member.name} qq={member.user_id} avatar={record.image} debug={is_debug_active}'
         )
     else:
         role = record.to_role()
         logger.info(
-            f'[gs_wuwa_daily_wife] mode={mode} user={ev.user_id} group={ev.group_id or "direct"} '
+            f'{LOG_PREFIX} mode={mode} user={ev.user_id} group={ev.group_id or "direct"} '
             f'role={role.name} ids={role.role_ids} image={record.image} debug={is_debug_active}'
         )
     await _send_record_image(bot, record, mode, ev.user_id)
 
 
 async def _send_group_member_wife(bot: Bot, ev: Event):
+    logger.info(f'{LOG_PREFIX} 用户 {ev.user_id} 触发了娶群友命令')
     if not _marry_member_enabled():
         return await bot.send('娶群友功能当前已关闭。')
     if not ev.group_id:
@@ -982,7 +1000,7 @@ async def _send_group_member_wife(bot: Bot, ev: Event):
         return await bot.send('没有获取到本群成员，暂时娶不到群友。')
 
     logger.info(
-        f'[gs_wuwa_daily_wife] marry_member user={ev.user_id} group={ev.group_id} '
+        f'{LOG_PREFIX} marry_member user={ev.user_id} group={ev.group_id} '
         f'member={member.name} qq={member.user_id} avatar={member.avatar}'
     )
     text = _build_member_text(member, 'marry') if bool(_cfg('DailyWifeSendText')) else None
@@ -990,6 +1008,7 @@ async def _send_group_member_wife(bot: Bot, ev: Event):
 
 
 async def _send_rob_wife(bot: Bot, ev: Event):
+    logger.info(f'{LOG_PREFIX} 用户 {ev.user_id} 在群 {ev.group_id} 发起了抢老婆操作')
     if not _cfg_bool('DailyWifeRobEnabled', True):
         return await bot.send('抢老婆功能当前已关闭。')
 
@@ -1011,16 +1030,20 @@ async def _send_rob_wife(bot: Bot, ev: Event):
     context = _get_today_context(data, ev)
     attempts = context.setdefault('rob_attempts', {})
     is_master = _is_master(ev)
+    
     if not is_master and attempts.get(robber_id):
+        logger.info(f'{LOG_PREFIX} 用户 {robber_id} 今天抢老婆次数已用尽')
         return await bot.send('今天已经抢过老婆啦，明天再来吧！')
 
     if not is_master:
         attempts[robber_id] = True
 
     if random.random() >= _rob_success_rate():
+        logger.info(f'{LOG_PREFIX} 用户 {robber_id} 抢 {target_user_id} 的老婆失败')
         _save_wife_data(data)
         return await bot.send('抢老婆失败了，还被对方痛扁了一顿！🤣')
 
+    logger.info(f'{LOG_PREFIX} 用户 {robber_id} 成功抢走了 {target_user_id} 的老婆')
     context['wives'][robber_id] = _record_to_dict(target_record, ev, robber_id)
     context['wives'][robber_id]['stolen_from'] = target_user_id
 
@@ -1037,6 +1060,7 @@ async def _send_rob_wife(bot: Bot, ev: Event):
 
 
 async def _send_wife_list(bot: Bot, ev: Event, mode: str = 'wife'):
+    logger.info(f'{LOG_PREFIX} 用户 {ev.user_id} 在群 {ev.group_id} 请求了 {mode} 列表')
     await bot.send(await _wife_list_text(ev, mode))
 
 
@@ -1050,7 +1074,6 @@ async def daily_wife_prefix(bot: Bot, ev: Event):
 
 @sv.on_fullmatch(('今日老婆', '娶婆娘'), block=True)
 async def daily_wife_full(bot: Bot, ev: Event):
-    # 全匹配模式下，没有后缀参数，直接传入空字符串
     await _send_daily_wife(bot, ev, mode='wife', specified_name='')
 
 
@@ -1071,7 +1094,6 @@ async def daily_husband_prefix(bot: Bot, ev: Event):
 async def daily_husband_full(bot: Bot, ev: Event):
     if not _husband_enabled():
         return await bot.send('今日老公功能当前已关闭。')
-    # 全匹配模式下，没有后缀参数，直接传入空字符串
     await _send_daily_wife(bot, ev, mode='husband', specified_name='')
 
 
