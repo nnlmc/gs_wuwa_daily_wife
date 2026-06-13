@@ -1055,9 +1055,17 @@ async def _send_wife_list(bot: Bot, ev: Event, mode: str = 'wife'):
 
 
 @sv.on_prefix('今日老婆', block=True)
-async def daily_wife(bot: Bot, ev: Event):
-    specified_name = ev.text.strip()
+async def daily_wife_prefix(bot: Bot, ev: Event):
+    specified_name = str(ev.text or '').strip()
+    if specified_name == '列表':
+        return await _send_wife_list(bot, ev, mode='wife')
     await _send_daily_wife(bot, ev, mode='wife', specified_name=specified_name)
+
+
+@sv.on_fullmatch('今日老婆', block=True)
+async def daily_wife_full(bot: Bot, ev: Event):
+    # 全匹配模式下，没有后缀参数，直接传入空字符串
+    await _send_daily_wife(bot, ev, mode='wife', specified_name='')
 
 
 @sv.on_fullmatch(('老婆列表', '今日老婆列表'), block=True)
@@ -1066,11 +1074,19 @@ async def daily_wife_list(bot: Bot, ev: Event):
 
 
 @sv.on_prefix('今日老公', block=True)
-async def daily_husband(bot: Bot, ev: Event):
+async def daily_husband_prefix(bot: Bot, ev: Event):
     if not _husband_enabled():
         return await bot.send('今日老公功能当前已关闭。')
-    specified_name = ev.text.strip()
+    specified_name = str(ev.text or '').strip()
     await _send_daily_wife(bot, ev, mode='husband', specified_name=specified_name)
+
+
+@sv.on_fullmatch('今日老公', block=True)
+async def daily_husband_full(bot: Bot, ev: Event):
+    if not _husband_enabled():
+        return await bot.send('今日老公功能当前已关闭。')
+    # 全匹配模式下，没有后缀参数，直接传入空字符串
+    await _send_daily_wife(bot, ev, mode='husband', specified_name='')
 
 
 @sv.on_fullmatch(('老公列表', '今日老公列表'), block=True)
